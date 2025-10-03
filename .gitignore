@@ -1,4 +1,4 @@
 # Ignore .env file
 .env
 #Ignore cache
-_pycache_/
+__pycache__/
