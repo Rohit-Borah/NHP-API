@@ -42,7 +42,7 @@ def get_station_data(
 ):
     """
     Returns station + RTDAS data
-    Filters: date (YYYY-MM-DD), station_type, basin
+    Filters: date (YYYY-MM-DD), station_type (AWLR, AWLR_ARG), basin
     """
 
     query = f"""
