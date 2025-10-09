@@ -171,6 +171,92 @@ def get_current_user(credentials: HTTPBasicCredentials = Depends(security)):
 #     }
 
 #-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# # === SQLAlchemy engine ===
+# engine_url = (
+#     f"postgresql+psycopg2://{DB_CONFIG['user']}:{DB_CONFIG['password']}"
+#     f"@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
+# )
+# engine = create_engine(engine_url)
+
+# @app.get("/stations/data")
+# def get_station_data(
+#     date: Optional[str] = Query(None, description="Filter by date (YYYY-MM-DD)"),
+#     station_type: Optional[str] = Query(None, description="Filter by station type"),
+#     basin: Optional[str] = Query(None, description="Filter by basin name"),
+#     page: Optional[int] = Query(None, ge=1, description="Page number (default 1)"),
+#     page_size: Optional[int] = Query(None, ge=1, le=500, description="Records per page (default 50)"),
+#     user: str = Depends(get_current_user)
+# ):
+#     """Fetch paginated RTDAS + master station data."""
+
+#     # Default pagination
+#     page = page or 1
+#     page_size = page_size or 50
+
+#     # === Main query ===
+#     base_query = """
+#         FROM nhp_rtdas_master m
+#         JOIN nhp_rtdas_ingest d ON m.id = d."StationID"
+#         WHERE 1=1
+#     """
+
+#     filters = []
+#     params = {}
+
+#     if date:
+#         filters.append('AND d."DateTime"::date = :date')
+#         params["date"] = date
+#     if station_type:
+#         filters.append("AND m.type = :station_type")
+#         params["station_type"] = station_type
+#     if basin:
+#         filters.append("AND m.basin = :basin")
+#         params["basin"] = basin
+
+#     # === Data query with pagination ===
+#     data_query = text(f"""
+#         SELECT
+#             m.id AS station_id,
+#             m.longitude,
+#             m.latitude,
+#             m.basin,
+#             m.name,
+#             m.type,
+#             d."MobileNumber",
+#             d."Battery",
+#             d."WaterLevel",
+#             d."HourlyRain",
+#             d."DailyRainfall",
+#             d."DateTime"
+#         {base_query}
+#         {' '.join(filters)}
+#         ORDER BY d."DateTime" DESC
+#         LIMIT :limit OFFSET :offset
+#     """)
+
+#     params["limit"] = page_size
+#     params["offset"] = (page - 1) * page_size
+
+#     # === Count query ===
+#     count_query = text(f"""
+#         SELECT COUNT(*) AS total
+#         {base_query}
+#         {' '.join(filters)}
+#     """)
+
+#     with engine.connect() as conn:
+#         df = pd.read_sql(data_query, conn, params=params)
+#         total_records = conn.execute(count_query, params).scalar() or 0
+
+#     return {
+#         "page": page,
+#         "page_size": page_size,
+#         "total_records": int(total_records),  # Fix numpy.int64 issue
+#         "total_pages": (int(total_records) + page_size - 1) // page_size,
+#         "data": df.to_dict(orient="records"),
+#     }
+
+#-------------------------------------------------------------------------------------------------------------------------------------------------------------------
 # === SQLAlchemy engine ===
 engine_url = (
     f"postgresql+psycopg2://{DB_CONFIG['user']}:{DB_CONFIG['password']}"
@@ -180,20 +266,23 @@ engine = create_engine(engine_url)
 
 @app.get("/stations/data")
 def get_station_data(
-    date: Optional[str] = Query(None, description="Filter by date (YYYY-MM-DD)"),
-    station_type: Optional[str] = Query(None, description="Filter by station type"),
-    basin: Optional[str] = Query(None, description="Filter by basin name"),
+    start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD, DD-MM-YYYY)"),
+    end_date: Optional[str] = Query(None, description="Filter by end date (YYYY-MM-DD, DD-MM-YYYY)"),
+    station_type: Optional[str] = Query(None, description="Filter by station type (AWLR, AWLR_ARG)"),
+    basin: Optional[str] = Query(None, description="Filter by basin name (Beki, Jiadhal, Buridehing)"),
     page: Optional[int] = Query(None, ge=1, description="Page number (default 1)"),
     page_size: Optional[int] = Query(None, ge=1, le=500, description="Records per page (default 50)"),
-    user: str = Depends(get_current_user)
+    user: str = Depends(get_current_user),
 ):
-    """Fetch paginated RTDAS + master station data."""
+    """
+    Fetch paginated RTDAS + master station data within a date range.
+    """
 
-    # Default pagination
+    # === Default pagination ===
     page = page or 1
     page_size = page_size or 50
 
-    # === Main query ===
+    # === Base query ===
     base_query = """
         FROM nhp_rtdas_master m
         JOIN nhp_rtdas_ingest d ON m.id = d."StationID"
@@ -203,9 +292,19 @@ def get_station_data(
     filters = []
     params = {}
 
-    if date:
-        filters.append('AND d."DateTime"::date = :date')
-        params["date"] = date
+    # === Date range filters ===
+    if start_date and end_date:
+        filters.append('AND d."DateTime"::date BETWEEN :start_date AND :end_date')
+        params["start_date"] = start_date
+        params["end_date"] = end_date
+    elif start_date:
+        filters.append('AND d."DateTime"::date >= :start_date')
+        params["start_date"] = start_date
+    elif end_date:
+        filters.append('AND d."DateTime"::date <= :end_date')
+        params["end_date"] = end_date
+
+    # === Additional filters ===
     if station_type:
         filters.append("AND m.type = :station_type")
         params["station_type"] = station_type
@@ -251,7 +350,7 @@ def get_station_data(
     return {
         "page": page,
         "page_size": page_size,
-        "total_records": int(total_records),  # Fix numpy.int64 issue
+        "total_records": int(total_records),
         "total_pages": (int(total_records) + page_size - 1) // page_size,
         "data": df.to_dict(orient="records"),
     }
