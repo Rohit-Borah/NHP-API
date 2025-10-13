@@ -264,6 +264,8 @@ engine_url = (
 )
 engine = create_engine(engine_url)
 
+#============Main data endpoint=================
+
 @app.get("/stations/data")
 def get_station_data(
     start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD, DD-MM-YYYY)"),
@@ -275,7 +277,11 @@ def get_station_data(
     user: str = Depends(get_current_user),
 ):
     """
-    Fetch paginated RTDAS + master station data within a date range.
+    Fetch RTDAS + master station data with optional filters:
+    - Date range (start_date, end_date)
+    - Station_type/Basin
+    - Pagination
+    - Latest record per station
     """
 
     # === Default pagination ===
@@ -352,5 +358,74 @@ def get_station_data(
         "page_size": page_size,
         "total_records": int(total_records),
         "total_pages": (int(total_records) + page_size - 1) // page_size,
+        "data": df.to_dict(orient="records"),
+    }
+
+#===============Latest record endpoint==========================
+
+
+@app.get("/stations/latest")
+def get_latest_station_data(
+    station_type: Optional[str] = Query(None, description="Filter by station type"),
+    basin: Optional[str] = Query(None, description="Filter by basin name"),
+    limit: Optional[int] = Query(1, ge=1, le=20, description="Number of latest records per station (default 1, max 20)"),
+    user: str = Depends(get_current_user),
+):
+    """
+    Fetch latest N records per station (default = 1, max = 20).
+    Optional filters: station_type, basin.
+    """
+
+    params = {"limit": limit}
+    meta_filters = []
+
+    # Filters on master table
+    if station_type:
+        meta_filters.append("AND m.type = :station_type")
+        params["station_type"] = station_type
+    if basin:
+        meta_filters.append("AND m.basin = :basin")
+        params["basin"] = basin
+
+    meta_where = " ".join(meta_filters)
+
+    query = text(f"""
+        WITH ranked AS (
+            SELECT
+                d."StationID",
+                d."DateTime",
+                d."MobileNumber",
+                d."Battery",
+                d."WaterLevel",
+                d."HourlyRain",
+                d."DailyRainfall",
+                ROW_NUMBER() OVER (PARTITION BY d."StationID" ORDER BY d."DateTime"::date DESC) AS rn
+            FROM nhp_rtdas_ingest d
+        )
+        SELECT
+            m.id AS station_id,
+            m.longitude,
+            m.latitude,
+            m.basin,
+            m.name,
+            m.type,
+            r."MobileNumber",
+            r."Battery",
+            r."WaterLevel",
+            r."HourlyRain",
+            r."DailyRainfall",
+            r."DateTime"
+        FROM ranked r
+        JOIN nhp_rtdas_master m ON m.id = r."StationID"
+        WHERE r.rn <= :limit {meta_where}
+        ORDER BY r."StationID", r."DateTime" DESC;
+    """)
+
+    with engine.connect() as conn:
+        df = pd.read_sql(query, conn, params=params)
+
+    return {
+        "limit_per_station": limit,
+        "total_records": len(df),
         "data": df.to_dict(orient="records"),
     }
