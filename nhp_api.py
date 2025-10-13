@@ -399,7 +399,7 @@ def get_latest_station_data(
                 d."WaterLevel",
                 d."HourlyRain",
                 d."DailyRainfall",
-                ROW_NUMBER() OVER (PARTITION BY d."StationID" ORDER BY d."DateTime"::date DESC) AS rn
+                ROW_NUMBER() OVER (PARTITION BY d."StationID" ORDER BY d."DateTime"::timestamp DESC) AS rn
             FROM nhp_rtdas_ingest d
         )
         SELECT
